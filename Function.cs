@@ -88,6 +88,7 @@ namespace SendResponseToCustomer
                     caseDetails.customerName = (String)caseSearch.SelectToken("values.customer_name");
                     caseDetails.staffResponse = (String)caseSearch.SelectToken("values.staff_response");
                     caseDetails.customerEmail = (String)caseSearch.SelectToken("values.email");
+                    caseDetails.staffName = (String)caseSearch.SelectToken("values.agents_name");
                 }
                 else
                 {
@@ -124,6 +125,7 @@ namespace SendResponseToCustomer
                 emailBody = emailBody.Replace("AAA", caseReference);
                 emailBody = emailBody.Replace("CCC", HttpUtility.HtmlEncode(caseDetails.staffResponse));
                 emailBody = emailBody.Replace("DDD", HttpUtility.HtmlEncode(caseDetails.customerName));
+                emailBody = emailBody.Replace("NNN", HttpUtility.HtmlEncode(caseDetails.staffName));
             }
             catch (Exception error)
             {
@@ -238,6 +240,7 @@ namespace SendResponseToCustomer
         public String customerName { get; set; } = "";
         public String staffResponse { get; set; } = "";
         public String customerEmail { get; set; } = "";
+        public String staffName { get; set; } = "";
     }
 
 }

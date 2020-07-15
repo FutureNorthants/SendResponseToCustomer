@@ -8,6 +8,8 @@ using Amazon;
 using Amazon.Lambda.Core;
 using Amazon.S3;
 using Amazon.S3.Model;
+using Amazon.SecretsManager;
+using Amazon.SecretsManager.Model;
 using Amazon.SQS;
 using Amazon.SQS.Model;
 using Amazon.StepFunctions;
@@ -21,56 +23,76 @@ namespace SendResponseToCustomer
 {
     public class Function
     {
+        private static readonly RegionEndpoint primaryRegion = RegionEndpoint.EUWest2;
         private static readonly RegionEndpoint bucketRegion = RegionEndpoint.EUWest1;
         private static readonly RegionEndpoint sqsRegion = RegionEndpoint.EUWest1;
+        private static readonly String secretName = "nbcGlobal";
+        private static readonly String secretAlias = "AWSCURRENT";
+
+        private static String caseReference;
+        private static String taskToken;
+        private static String cxmEndPoint;
+        private static String cxmAPIKey;
+        private Secrets secrets = null;
 
         public async Task FunctionHandler(object input, ILambdaContext context)
         {
-            String instance = Environment.GetEnvironmentVariable("instance");
-            String cxmEndPoint;
-            String cxmAPIKey;
-            //TODO Use secrets manager
-            //TODO change default to error trap
-            //TODO Use lambda variable instead of instance
-            switch (instance.ToLower())
+            if (await GetSecrets())
             {
-                case "live":
-                    cxmEndPoint = Environment.GetEnvironmentVariable("cxmEndPointLive");
-                    cxmAPIKey = Environment.GetEnvironmentVariable("cxmAPIKeyLive");
-                    break;
-                default:
-                    cxmEndPoint = Environment.GetEnvironmentVariable("cxmEndPointTest");
-                    cxmAPIKey = Environment.GetEnvironmentVariable("cxmAPIKeyTest");
-                    break;
-            }
-            JObject o = JObject.Parse(input.ToString());
-            String caseReference = (string)o.SelectToken("CaseReference");
-            String taskToken = (string)o.SelectToken("TaskToken");
-            Console.WriteLine("caseReference : " + caseReference);
-            CaseDetails caseDetails = await GetStaffResponseAsync(cxmEndPoint, cxmAPIKey, caseReference, taskToken);
-            try
-            {
-                if (!String.IsNullOrEmpty(caseDetails.staffResponse))
+                String instance = Environment.GetEnvironmentVariable("instance");
+                JObject o = JObject.Parse(input.ToString());
+                caseReference = (string)o.SelectToken("CaseReference");
+                taskToken = (string)o.SelectToken("TaskToken");
+                Console.WriteLine("caseReference : " + caseReference);
+                switch (instance.ToLower())
                 {
-                    String emailBody = await FormatEmailAsync(caseReference, caseDetails, taskToken);
-                    if (!String.IsNullOrEmpty(emailBody))
-                    {
-                        //TODO remove nortbert hardcoding
-                        if(await SendMessageAsync(caseReference, taskToken,emailBody,caseDetails,"norbert@northampton.digital"))
-                        {
-                            await SendSuccessAsync(taskToken);
-                        }                       
-                    }
+                    case "live":
+                        cxmEndPoint = secrets.cxmEndPointLive;
+                        cxmAPIKey = secrets.cxmAPIKeyLive;
+                        CaseDetails caseDetailsLive = await GetCaseDetailsAsync();
+                        await ProcessCaseAsync(caseDetailsLive);
+                        await SendSuccessAsync();
+                        break;
+                    case "test":
+                        cxmEndPoint = secrets.cxmEndPointTest;
+                        cxmAPIKey = secrets.cxmAPIKeyTest;
+                        CaseDetails caseDetailsTest = await GetCaseDetailsAsync();
+                        await ProcessCaseAsync(caseDetailsTest);
+                        await SendSuccessAsync();
+                        break;
+                    default:
+                        await SendFailureAsync("Instance not Live or Test : " + instance.ToLower(), "Lambda Parameter Error");
+                        Console.WriteLine("ERROR : Instance not Live or Test : " + instance.ToLower());
+                        break;
                 }
-            }
-            catch (Exception)
-            {
-            }
-                   
+            }                 
             Console.WriteLine("Completed");
         }
 
-        private async Task<CaseDetails> GetStaffResponseAsync(String cxmEndPoint, String cxmAPIKey, String caseReference, String taskToken)
+        private async Task<Boolean> GetSecrets()
+        {
+            IAmazonSecretsManager client = new AmazonSecretsManagerClient(primaryRegion);
+
+            GetSecretValueRequest request = new GetSecretValueRequest();
+            request.SecretId = secretName;
+            request.VersionStage = secretAlias;
+
+            try
+            {
+                GetSecretValueResponse response = await client.GetSecretValueAsync(request);
+                secrets = JsonConvert.DeserializeObject<Secrets>(response.SecretString);
+                return true;
+            }
+            catch (Exception error)
+            {
+                await SendFailureAsync("GetSecrets", error.Message);
+                Console.WriteLine("ERROR : GetSecretValue : " + error.Message);
+                Console.WriteLine("ERROR : GetSecretValue : " + error.StackTrace);
+                return false;
+            }
+        }
+
+        private async Task<CaseDetails> GetCaseDetailsAsync()
         {
             CaseDetails caseDetails = new CaseDetails();
             HttpClient cxmClient = new HttpClient();
@@ -89,23 +111,98 @@ namespace SendResponseToCustomer
                     caseDetails.staffResponse = (String)caseSearch.SelectToken("values.staff_response");
                     caseDetails.customerEmail = (String)caseSearch.SelectToken("values.email");
                     caseDetails.staffName = (String)caseSearch.SelectToken("values.agents_name");
+                    caseDetails.transitionTo = (String)caseSearch.SelectToken("values.new_case_status");
                 }
                 else
                 {
-                    await SendFailureAsync(taskToken, "Getting case details for " + caseReference + " : " + response.StatusCode.ToString());
+                    await SendFailureAsync("Getting case details for " + caseReference, response.StatusCode.ToString());
                     Console.WriteLine("ERROR : GetStaffResponseAsync : " + request.ToString());
                     Console.WriteLine("ERROR : GetStaffResponseAsync : " + response.StatusCode.ToString());
                 }
             }
             catch (Exception error)
             {
-                await SendFailureAsync(taskToken, "Getting case details for " + caseReference + " : " + error.Message);
+                await SendFailureAsync("Getting case details for " + caseReference, error.Message);
                 Console.WriteLine("ERROR : GetStaffResponseAsync : " + error.StackTrace);
             }
             return caseDetails;
         }
 
-        private async Task<String> FormatEmailAsync(String caseReference, CaseDetails caseDetails, String taskToken)
+        private async Task<Boolean> ProcessCaseAsync(CaseDetails caseDetails)
+        {
+            Boolean success = true;
+            try
+            {
+                if (!String.IsNullOrEmpty(caseDetails.staffResponse))
+                {
+                    String emailBody = await FormatEmailAsync(caseDetails);
+                    if (!String.IsNullOrEmpty(emailBody))
+                    {
+                        //TODO remove nortbert hardcoding
+                        if (await SendMessageAsync(emailBody, caseDetails, "norbert@northampton.digital"))
+                        {
+                            switch (caseDetails.transitionTo.ToLower())
+                            {
+                                case "close":
+                                    await TransitionCaseAsync("close-case");
+                                    break;
+                                case "awaiting_customer_response":
+                                    await TransitionCaseAsync("awaiting-customer");
+                                    break;
+                                default:
+                                    await SendFailureAsync("Enexpected New Case Status for " + caseReference, caseDetails.transitionTo.ToLower());
+                                    Console.WriteLine("Enexpected New Case Status for " + caseReference + " : " + caseDetails.transitionTo.ToLower());
+                                    success=false;
+                                    break;
+                            }                          
+                        }
+                        else
+                        {
+                            success = false;
+                        }
+                    }
+                    else
+                    {
+                        await SendFailureAsync("Empty Message Body : " + caseReference, "ProcessCaseAsync");
+                        Console.WriteLine("ERROR : ProcessCaseAsyn : Empty Message Body : " + caseReference);
+                        success = false;
+                    }
+                }
+                else
+                {
+                    await SendFailureAsync("Empty Response : " + caseReference, "ProcessCaseAsync");
+                    Console.WriteLine("ERROR : ProcessCaseAsyn : Empty Response : " + caseReference);
+                    success = false;
+                }
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+            return success;
+        }
+
+        private async Task<Boolean> TransitionCaseAsync(String transitionTo)
+        {
+            Boolean success = false;
+            HttpClient cxmClient = new HttpClient();
+            cxmClient.BaseAddress = new Uri(cxmEndPoint);
+            string requestParameters = "key=" + cxmAPIKey;
+            HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, "/api/service-api/norbert/case/" + caseReference + "/transition/" + transitionTo + "?" + requestParameters);
+            HttpResponseMessage response = cxmClient.SendAsync(request).Result;
+            if (response.IsSuccessStatusCode)
+            {
+                success = true;
+            }
+            else
+            {
+                await SendFailureAsync("CXM Failed to transiton : " + caseReference + " to " + transitionTo, "TransitionCaseAsync");
+                Console.WriteLine("ERROR CXM Failed to transiton : " + caseReference + " to " + transitionTo);
+            }
+            return success;
+        }
+
+        private async Task<String> FormatEmailAsync(CaseDetails caseDetails)
         {
             String emailBody = "";
             IAmazonS3 client = new AmazonS3Client(bucketRegion);
@@ -129,14 +226,14 @@ namespace SendResponseToCustomer
             }
             catch (Exception error)
             {
-                await SendFailureAsync(taskToken, " Reading Response Template : " + error.Message);
+                await SendFailureAsync(" Reading Response Template", error.Message);
                 Console.WriteLine("ERROR : FormatEmailAsync : Reading Response Template : " + error.Message);
                 Console.WriteLine("ERROR : FormatEmailAsync : " + error.StackTrace);
             }
             return emailBody;
         }
 
-        private async Task<Boolean> SendMessageAsync(String caseReference, String taskToken, String emailBody, CaseDetails caseDetails, String emailFrom)
+        private async Task<Boolean> SendMessageAsync(String emailBody, CaseDetails caseDetails, String emailFrom)
         {
             try
             {
@@ -168,7 +265,7 @@ namespace SendResponseToCustomer
                 }
                 catch (Exception error)
                 {
-                    await SendFailureAsync(taskToken, "Error sending SQS message : " + error.Message);
+                    await SendFailureAsync("Error sending SQS message", error.Message);
                     Console.WriteLine("ERROR : SendMessageAsync : Error sending SQS message : '{0}'", error.Message);
                     Console.WriteLine("ERROR : SendMessageAsync : " + error.StackTrace);
                     return false;
@@ -176,7 +273,7 @@ namespace SendResponseToCustomer
             }
             catch (Exception error)
             {
-                await SendFailureAsync(taskToken, "Error starting AmazonSQSClient : " + error.Message);
+                await SendFailureAsync("Error starting AmazonSQSClient", error.Message);
                 Console.WriteLine("ERROR : SendMessageAsync :  Error starting AmazonSQSClient : '{0}'", error.Message);
                 Console.WriteLine("ERROR : SendMessageAsync : " + error.StackTrace);
                 return false;
@@ -184,7 +281,7 @@ namespace SendResponseToCustomer
             return true;
         }
 
-        private async Task SendSuccessAsync(String taskToken)
+        private async Task SendSuccessAsync()
         {
             AmazonStepFunctionsClient client = new AmazonStepFunctionsClient();
             SendTaskSuccessRequest successRequest = new SendTaskSuccessRequest();
@@ -209,22 +306,17 @@ namespace SendResponseToCustomer
             await Task.CompletedTask;
         }
 
-        private async Task SendFailureAsync(String taskToken, String message)
+        private async Task SendFailureAsync(String failureCause, String failureError)
         {
             AmazonStepFunctionsClient client = new AmazonStepFunctionsClient();
-            SendTaskSuccessRequest successRequest = new SendTaskSuccessRequest();
-            successRequest.TaskToken = taskToken;
-            Dictionary<String, String> result = new Dictionary<String, String>
-            {
-                { "Result"  , "Error" },
-                { "Message" , message}
-            };
+            SendTaskFailureRequest failureRequest = new SendTaskFailureRequest();
+            failureRequest.Cause = failureCause;
+            failureRequest.Error = failureError;
+            failureRequest.TaskToken = taskToken;
 
-            string requestOutput = JsonConvert.SerializeObject(result, Formatting.Indented);
-            successRequest.Output = requestOutput;
             try
             {
-                await client.SendTaskSuccessAsync(successRequest);
+                await client.SendTaskFailureAsync(failureRequest);
             }
             catch (Exception error)
             {
@@ -235,12 +327,20 @@ namespace SendResponseToCustomer
         }
     }
 
-    class CaseDetails
+    public class CaseDetails
     {
         public String customerName { get; set; } = "";
         public String staffResponse { get; set; } = "";
         public String customerEmail { get; set; } = "";
         public String staffName { get; set; } = "";
+        public String transitionTo { get; set; } = "";
     }
 
+    public class Secrets
+    {
+        public string cxmEndPointTest { get; set; }
+        public string cxmEndPointLive { get; set; }
+        public string cxmAPIKeyTest { get; set; }
+        public string cxmAPIKeyLive { get; set; }
+    }
 }

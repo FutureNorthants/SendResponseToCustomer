@@ -5,6 +5,8 @@ using System.Net.Http;
 using System.Threading.Tasks;
 using System.Web;
 using Amazon;
+using Amazon.DynamoDBv2;
+using Amazon.DynamoDBv2.DocumentModel;
 using Amazon.Lambda.Core;
 using Amazon.S3;
 using Amazon.S3.Model;
@@ -33,6 +35,8 @@ namespace SendResponseToCustomer
         private static String taskToken;
         private static String cxmEndPoint;
         private static String cxmAPIKey;
+        private static String dynamoTable;
+
         private Secrets secrets = null;
 
         public async Task FunctionHandler(object input, ILambdaContext context)
@@ -49,6 +53,7 @@ namespace SendResponseToCustomer
                     case "live":
                         cxmEndPoint = secrets.cxmEndPointLive;
                         cxmAPIKey = secrets.cxmAPIKeyLive;
+                        dynamoTable = "MailBotCasesLive";
                         CaseDetails caseDetailsLive = await GetCaseDetailsAsync();
                         await ProcessCaseAsync(caseDetailsLive);
                         await SendSuccessAsync();
@@ -56,6 +61,9 @@ namespace SendResponseToCustomer
                     case "test":
                         cxmEndPoint = secrets.cxmEndPointTest;
                         cxmAPIKey = secrets.cxmAPIKeyTest;
+                        //TODO change!
+                        //dynamoTable = "MailBotCasesTest";
+                        dynamoTable = "MailBotCasesLive";
                         CaseDetails caseDetailsTest = await GetCaseDetailsAsync();
                         await ProcessCaseAsync(caseDetailsTest);
                         await SendSuccessAsync();
@@ -222,6 +230,7 @@ namespace SendResponseToCustomer
                 emailBody = emailBody.Replace("AAA", caseReference);
                 emailBody = emailBody.Replace("CCC", HttpUtility.HtmlEncode(caseDetails.staffResponse));
                 emailBody = emailBody.Replace("DDD", HttpUtility.HtmlEncode(caseDetails.customerName));
+                emailBody = emailBody.Replace("FFF", HttpUtility.HtmlEncode(await GetContactFromDynamoAsync(caseReference)));
                 emailBody = emailBody.Replace("NNN", HttpUtility.HtmlEncode(caseDetails.staffName));
             }
             catch (Exception error)
@@ -279,6 +288,28 @@ namespace SendResponseToCustomer
                 return false;
             }
             return true;
+        }
+
+        private async Task<String> GetContactFromDynamoAsync(String caseReference)
+        {
+            try
+            {
+                AmazonDynamoDBClient dynamoDBClient = new AmazonDynamoDBClient(primaryRegion);
+                Table productCatalog = Table.LoadTable(dynamoDBClient, dynamoTable);
+                GetItemOperationConfig config = new GetItemOperationConfig
+                {
+                    AttributesToGet = new List<string> { "InitialContact" },
+                    ConsistentRead = true
+                };
+                Document document = await productCatalog.GetItemAsync(caseReference, config);
+                return document["InitialContact"].AsPrimitive().Value.ToString();
+            }
+            catch (Exception error)
+            {
+                Console.WriteLine("ERROR : GetContactFromDynamoAsync : " + error.Message);
+                Console.WriteLine(error.StackTrace);
+                return "";
+            }
         }
 
         private async Task SendSuccessAsync()

@@ -116,7 +116,7 @@ namespace SendResponseToCustomer
                     String responseString = responseContent.ReadAsStringAsync().Result;
                     JObject caseSearch = JObject.Parse(responseString);
                     caseDetails.customerName = (String)caseSearch.SelectToken("values.customer_name");
-                    caseDetails.staffResponse = (String)caseSearch.SelectToken("values.staff_response");
+                    caseDetails.contactResponse = (String)caseSearch.SelectToken("values.contact_response");
                     caseDetails.customerEmail = (String)caseSearch.SelectToken("values.email");
                     caseDetails.staffName = (String)caseSearch.SelectToken("values.agents_name");
                     caseDetails.transitionTo = (String)caseSearch.SelectToken("values.new_case_status");
@@ -141,7 +141,7 @@ namespace SendResponseToCustomer
             Boolean success = true;
             try
             {
-                if (!String.IsNullOrEmpty(caseDetails.staffResponse))
+                if (!String.IsNullOrEmpty(caseDetails.contactResponse))
                 {
                     String emailBody = await FormatEmailAsync(caseDetails);
                     if (!String.IsNullOrEmpty(emailBody))
@@ -228,7 +228,7 @@ namespace SendResponseToCustomer
                     emailBody = reader.ReadToEnd();
                 }
                 emailBody = emailBody.Replace("AAA", caseReference);
-                emailBody = emailBody.Replace("CCC", HttpUtility.HtmlEncode(caseDetails.staffResponse));
+                emailBody = emailBody.Replace("CCC", HttpUtility.HtmlEncode(caseDetails.contactResponse));
                 emailBody = emailBody.Replace("DDD", HttpUtility.HtmlEncode(caseDetails.customerName));
                 emailBody = emailBody.Replace("FFF", HttpUtility.HtmlEncode(await GetContactFromDynamoAsync(caseReference)));
                 emailBody = emailBody.Replace("NNN", HttpUtility.HtmlEncode(caseDetails.staffName));
@@ -361,7 +361,7 @@ namespace SendResponseToCustomer
     public class CaseDetails
     {
         public String customerName { get; set; } = "";
-        public String staffResponse { get; set; } = "";
+        public String contactResponse { get; set; } = "";
         public String customerEmail { get; set; } = "";
         public String staffName { get; set; } = "";
         public String transitionTo { get; set; } = "";

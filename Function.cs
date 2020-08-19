@@ -7,6 +7,7 @@ using System.Web;
 using Amazon;
 using Amazon.DynamoDBv2;
 using Amazon.DynamoDBv2.DocumentModel;
+using Amazon.DynamoDBv2.Model;
 using Amazon.Lambda.Core;
 using Amazon.S3;
 using Amazon.S3.Model;
@@ -35,7 +36,7 @@ namespace SendResponseToCustomer
         private static String taskToken;
         private static String cxmEndPoint;
         private static String cxmAPIKey;
-        private static String dynamoTable;
+        private static String dynamoTable = "MailBotCasesTest";
 
         private Secrets secrets = null;
 
@@ -48,12 +49,22 @@ namespace SendResponseToCustomer
                 caseReference = (string)o.SelectToken("CaseReference");
                 taskToken = (string)o.SelectToken("TaskToken");
                 Console.WriteLine("caseReference : " + caseReference);
+
+                try
+                {
+                    if (context.InvokedFunctionArn.ToLower().Contains("prod"))
+                    {
+                        dynamoTable = "MailBotCasesLive";
+                    }
+                }
+                catch (Exception)
+                {
+                }
                 switch (instance.ToLower())
                 {
                     case "live":
                         cxmEndPoint = secrets.cxmEndPointLive;
                         cxmAPIKey = secrets.cxmAPIKeyLive;
-                        dynamoTable = "MailBotCasesLive";
                         CaseDetails caseDetailsLive = await GetCaseDetailsAsync();
                         await ProcessCaseAsync(caseDetailsLive);
                         await SendSuccessAsync();
@@ -61,9 +72,6 @@ namespace SendResponseToCustomer
                     case "test":
                         cxmEndPoint = secrets.cxmEndPointTest;
                         cxmAPIKey = secrets.cxmAPIKeyTest;
-                        //TODO change!
-                        //dynamoTable = "MailBotCasesTest";
-                        dynamoTable = "MailBotCasesLive";
                         CaseDetails caseDetailsTest = await GetCaseDetailsAsync();
                         await ProcessCaseAsync(caseDetailsTest);
                         await SendSuccessAsync();
@@ -120,6 +128,7 @@ namespace SendResponseToCustomer
                     caseDetails.customerEmail = (String)caseSearch.SelectToken("values.email");
                     caseDetails.staffName = (String)caseSearch.SelectToken("values.agents_name");
                     caseDetails.transitionTo = (String)caseSearch.SelectToken("values.new_case_status");
+                    caseDetails.serviceArea = (String)caseSearch.SelectToken("values.service_area_4");
                 }
                 else
                 {
@@ -143,36 +152,43 @@ namespace SendResponseToCustomer
             {
                 if (!String.IsNullOrEmpty(caseDetails.contactResponse))
                 {
-                    String emailBody = await FormatEmailAsync(caseDetails);
-                    if (!String.IsNullOrEmpty(emailBody))
+                    if(await StoreServiceToDynamoAsync(caseReference, caseDetails.serviceArea))
                     {
-                        //TODO remove nortbert hardcoding
-                        if (await SendMessageAsync(emailBody, caseDetails, "norbert@northampton.digital"))
+                        String emailBody = await FormatEmailAsync(caseDetails);
+                        if (!String.IsNullOrEmpty(emailBody))
                         {
-                            switch (caseDetails.transitionTo.ToLower())
+                            //TODO remove norbert hardcoding
+                            if (await SendMessageAsync(emailBody, caseDetails, "norbert@northampton.digital"))
                             {
-                                case "close":
-                                    await TransitionCaseAsync("close-case");
-                                    break;
-                                case "awaiting_customer_response":
-                                    await TransitionCaseAsync("awaiting-customer");
-                                    break;
-                                default:
-                                    await SendFailureAsync("Enexpected New Case Status for " + caseReference, caseDetails.transitionTo.ToLower());
-                                    Console.WriteLine("Enexpected New Case Status for " + caseReference + " : " + caseDetails.transitionTo.ToLower());
-                                    success=false;
-                                    break;
-                            }                          
+                                switch (caseDetails.transitionTo.ToLower())
+                                {
+                                    case "close":
+                                        await TransitionCaseAsync("close-case");
+                                        break;
+                                    case "awaiting_customer_response":
+                                        await TransitionCaseAsync("awaiting-customer");
+                                        break;
+                                    default:
+                                        await SendFailureAsync("Enexpected New Case Status for " + caseReference, caseDetails.transitionTo.ToLower());
+                                        Console.WriteLine("Enexpected New Case Status for " + caseReference + " : " + caseDetails.transitionTo.ToLower());
+                                        success = false;
+                                        break;
+                                }
+                            }
+                            else
+                            {
+                                success = false;
+                            }
                         }
                         else
                         {
+                            await SendFailureAsync("Empty Message Body : " + caseReference, "ProcessCaseAsync");
+                            Console.WriteLine("ERROR : ProcessCaseAsyn : Empty Message Body : " + caseReference);
                             success = false;
                         }
                     }
                     else
                     {
-                        await SendFailureAsync("Empty Message Body : " + caseReference, "ProcessCaseAsync");
-                        Console.WriteLine("ERROR : ProcessCaseAsyn : Empty Message Body : " + caseReference);
                         success = false;
                     }
                 }
@@ -312,6 +328,41 @@ namespace SendResponseToCustomer
             }
         }
 
+        private async Task<Boolean> StoreServiceToDynamoAsync(String caseReference, String service)
+        {
+            try
+            {
+                AmazonDynamoDBClient dynamoDBClient = new AmazonDynamoDBClient(primaryRegion);
+                UpdateItemRequest dynamoRequest = new UpdateItemRequest
+                {
+                    TableName = dynamoTable,
+                    Key = new Dictionary<string, AttributeValue>
+                        {
+                              { "CaseReference", new AttributeValue { S = caseReference }}
+                        },
+                    ExpressionAttributeNames = new Dictionary<string, string>()
+                    {
+                        {"#Field", "ActualService"}
+                    },
+                    ExpressionAttributeValues = new Dictionary<string, AttributeValue>()
+                    {
+                        {":Value",new AttributeValue {S = service}}
+                    },
+
+                    UpdateExpression = "SET #Field = :Value"
+                };
+                await dynamoDBClient.UpdateItemAsync(dynamoRequest);
+                return true;
+            }
+            catch (Exception error)
+            {
+                Console.WriteLine("ERROR : StoreContactToDynamoDB :" + error.Message);
+                Console.WriteLine(error.StackTrace);
+                return false;
+            }
+        }
+
+
         private async Task SendSuccessAsync()
         {
             AmazonStepFunctionsClient client = new AmazonStepFunctionsClient();
@@ -365,6 +416,7 @@ namespace SendResponseToCustomer
         public String customerEmail { get; set; } = "";
         public String staffName { get; set; } = "";
         public String transitionTo { get; set; } = "";
+        public String serviceArea { get; set; } = "";
     }
 
     public class Secrets

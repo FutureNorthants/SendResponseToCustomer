@@ -129,6 +129,7 @@ namespace SendResponseToCustomer
                     caseDetails.staffName = (String)caseSearch.SelectToken("values.agents_name");
                     caseDetails.transitionTo = (String)caseSearch.SelectToken("values.new_case_status");
                     caseDetails.serviceArea = (String)caseSearch.SelectToken("values.service_area_4");
+                    caseDetails.sentiment = (String)caseSearch.SelectToken("values.sentiment");
                 }
                 else
                 {
@@ -152,7 +153,8 @@ namespace SendResponseToCustomer
             {
                 if (!String.IsNullOrEmpty(caseDetails.contactResponse))
                 {
-                    if(await StoreServiceToDynamoAsync(caseReference, caseDetails.serviceArea))
+                    if(await StoreServiceToDynamoAsync(caseReference, "ActualService", caseDetails.serviceArea)&&
+                       await StoreServiceToDynamoAsync(caseReference, "ActualSentiment", caseDetails.sentiment))
                     {
                         String emailBody = await FormatEmailAsync(caseDetails);
                         if (!String.IsNullOrEmpty(emailBody))
@@ -328,7 +330,7 @@ namespace SendResponseToCustomer
             }
         }
 
-        private async Task<Boolean> StoreServiceToDynamoAsync(String caseReference, String service)
+        private async Task<Boolean> StoreServiceToDynamoAsync(String caseReference, String fieldName, String fieldValue)
         {
             try
             {
@@ -342,11 +344,11 @@ namespace SendResponseToCustomer
                         },
                     ExpressionAttributeNames = new Dictionary<string, string>()
                     {
-                        {"#Field", "ActualService"}
+                        {"#Field", fieldName}
                     },
                     ExpressionAttributeValues = new Dictionary<string, AttributeValue>()
                     {
-                        {":Value",new AttributeValue {S = service}}
+                        {":Value",new AttributeValue {S = fieldValue}}
                     },
 
                     UpdateExpression = "SET #Field = :Value"
@@ -417,6 +419,7 @@ namespace SendResponseToCustomer
         public String staffName { get; set; } = "";
         public String transitionTo { get; set; } = "";
         public String serviceArea { get; set; } = "";
+        public String sentiment { get; set; } = "";
     }
 
     public class Secrets

@@ -153,8 +153,9 @@ namespace SendResponseToCustomer
             {
                 if (!String.IsNullOrEmpty(caseDetails.contactResponse))
                 {
-                    if(await StoreServiceToDynamoAsync(caseReference, "ActualService", caseDetails.serviceArea)&&
-                       await StoreServiceToDynamoAsync(caseReference, "ActualSentiment", caseDetails.sentiment))
+                    if(await StoreToDynamoAsync(caseReference, "ActualService", caseDetails.serviceArea)&&
+                       await StoreToDynamoAsync(caseReference, "ActualSentiment", caseDetails.sentiment)&&
+                       await StoreToDynamoAsync(caseReference, "ActualResponse", caseDetails.contactResponse))
                     {
                         String emailBody = await FormatEmailAsync(caseDetails);
                         if (!String.IsNullOrEmpty(emailBody))
@@ -330,7 +331,7 @@ namespace SendResponseToCustomer
             }
         }
 
-        private async Task<Boolean> StoreServiceToDynamoAsync(String caseReference, String fieldName, String fieldValue)
+        private async Task<Boolean> StoreToDynamoAsync(String caseReference, String fieldName, String fieldValue)
         {
             try
             {

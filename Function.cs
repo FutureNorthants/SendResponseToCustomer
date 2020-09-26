@@ -37,6 +37,7 @@ namespace SendResponseToCustomer
         private static String cxmEndPoint;
         private static String cxmAPIKey;
         private static String dynamoTable = "MailBotCasesTest";
+        private Boolean liveInstance = false;
 
         private Secrets secrets = null;
 
@@ -44,7 +45,6 @@ namespace SendResponseToCustomer
         {
             if (await GetSecrets())
             {
-                String instance = Environment.GetEnvironmentVariable("instance");
                 JObject o = JObject.Parse(input.ToString());
                 caseReference = (string)o.SelectToken("CaseReference");
                 taskToken = (string)o.SelectToken("TaskToken");
@@ -55,31 +55,28 @@ namespace SendResponseToCustomer
                     if (context.InvokedFunctionArn.ToLower().Contains("prod"))
                     {
                         dynamoTable = "MailBotCasesLive";
+                        liveInstance = true;
                     }
                 }
                 catch (Exception)
                 {
                 }
-                switch (instance.ToLower())
+
+                if (liveInstance)
                 {
-                    case "live":
-                        cxmEndPoint = secrets.cxmEndPointLive;
-                        cxmAPIKey = secrets.cxmAPIKeyLive;
-                        CaseDetails caseDetailsLive = await GetCaseDetailsAsync();
-                        await ProcessCaseAsync(caseDetailsLive);
-                        await SendSuccessAsync();
-                        break;
-                    case "test":
-                        cxmEndPoint = secrets.cxmEndPointTest;
-                        cxmAPIKey = secrets.cxmAPIKeyTest;
-                        CaseDetails caseDetailsTest = await GetCaseDetailsAsync();
-                        await ProcessCaseAsync(caseDetailsTest);
-                        await SendSuccessAsync();
-                        break;
-                    default:
-                        await SendFailureAsync("Instance not Live or Test : " + instance.ToLower(), "Lambda Parameter Error");
-                        Console.WriteLine("ERROR : Instance not Live or Test : " + instance.ToLower());
-                        break;
+                    cxmEndPoint = secrets.cxmEndPointLive;
+                    cxmAPIKey = secrets.cxmAPIKeyLive;
+                    CaseDetails caseDetailsLive = await GetCaseDetailsAsync();
+                    await ProcessCaseAsync(caseDetailsLive);
+                    await SendSuccessAsync();
+                }
+                else
+                {
+                    cxmEndPoint = secrets.cxmEndPointTest;
+                    cxmAPIKey = secrets.cxmAPIKeyTest;
+                    CaseDetails caseDetailsTest = await GetCaseDetailsAsync();
+                    await ProcessCaseAsync(caseDetailsTest);
+                    await SendSuccessAsync();
                 }
             }                 
             Console.WriteLine("Completed");
@@ -270,7 +267,7 @@ namespace SendResponseToCustomer
                 try
                 {
                     SendMessageRequest sendMessageRequest = new SendMessageRequest();
-                    sendMessageRequest.QueueUrl = Environment.GetEnvironmentVariable("sqsEmailURL");
+                    sendMessageRequest.QueueUrl = secrets.sqsEmailURL;
                     sendMessageRequest.MessageBody = emailBody;
                     Dictionary<string, MessageAttributeValue> MessageAttributes = new Dictionary<string, MessageAttributeValue>();
                     MessageAttributeValue messageTypeAttribute1 = new MessageAttributeValue();
@@ -430,5 +427,6 @@ namespace SendResponseToCustomer
         public string cxmEndPointLive { get; set; }
         public string cxmAPIKeyTest { get; set; }
         public string cxmAPIKeyLive { get; set; }
+        public string sqsEmailURL { get; set; }
     }
 }

@@ -123,7 +123,7 @@ namespace SendResponseToCustomer
                     HttpContent responseContent = response.Content;
                     String responseString = responseContent.ReadAsStringAsync().Result;
                     JObject caseSearch = JObject.Parse(responseString);
-                    caseDetails.customerName = (String)caseSearch.SelectToken("values.customer_name");
+                    caseDetails.customerName = (String)caseSearch.SelectToken("values.first-name") + " " + (String)caseSearch.SelectToken("values.surname");
                     caseDetails.contactResponse = (String)caseSearch.SelectToken("values.contact_response");
                     caseDetails.customerEmail = (String)caseSearch.SelectToken("values.email");
                     caseDetails.staffName = (String)caseSearch.SelectToken("values.agents_name");
@@ -161,7 +161,8 @@ namespace SendResponseToCustomer
                         if (!String.IsNullOrEmpty(emailBody))
                         {
                             //TODO remove norbert hardcoding
-                            if (await SendMessageAsync(emailBody, caseDetails, "norbert@northampton.digital"))
+                            if (await SendMessageAsync(emailBody, caseDetails, "updates@northampton.gov.uk"))
+                            //if (await SendMessageAsync(emailBody, caseDetails, "norbert@northampton.digital"))
                             {
                                 switch (caseDetails.transitionTo.ToLower())
                                 {

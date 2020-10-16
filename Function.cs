@@ -127,6 +127,7 @@ namespace SendResponseToCustomer
                     caseDetails.transitionTo = (String)caseSearch.SelectToken("values.new_case_status");
                     caseDetails.serviceArea = (String)caseSearch.SelectToken("values.service_area_4");
                     caseDetails.sentiment = (String)caseSearch.SelectToken("values.sentiment");
+                    caseDetails.recommendationAccuracy = (String)caseSearch.SelectToken("values.recommendation_accuracy");
                 }
                 else
                 {
@@ -152,7 +153,8 @@ namespace SendResponseToCustomer
                 {
                     if(await StoreToDynamoAsync(caseReference, "ActualService", caseDetails.serviceArea)&&
                        await StoreToDynamoAsync(caseReference, "ActualSentiment", caseDetails.sentiment)&&
-                       await StoreToDynamoAsync(caseReference, "ActualResponse", caseDetails.contactResponse))
+                       await StoreToDynamoAsync(caseReference, "ActualResponse", caseDetails.contactResponse)&&
+                       await StoreToDynamoAsync(caseReference, "RecommendationAccuracy", caseDetails.recommendationAccuracy))
                     {
                         String emailBody = await FormatEmailAsync(caseDetails);
                         if (!String.IsNullOrEmpty(emailBody))
@@ -419,6 +421,7 @@ namespace SendResponseToCustomer
         public String transitionTo { get; set; } = "";
         public String serviceArea { get; set; } = "";
         public String sentiment { get; set; } = "";
+        public String recommendationAccuracy { get; set; } = "";
     }
 
     public class Secrets

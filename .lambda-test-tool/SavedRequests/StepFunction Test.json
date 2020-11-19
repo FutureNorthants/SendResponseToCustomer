@@ -1,4 +1,6 @@
 {
-  "CaseReference": "EMA000544",
-  "TaskToken":"X"
+  "Transitioner": "mycouncil@northampton.gov.uk",
+  "CaseReference": "EMA003947",
+  "FromStatus": "awaiting-review",
+  "Transition": "awaiting-review"
 }

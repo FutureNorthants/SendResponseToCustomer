@@ -45,9 +45,21 @@ namespace SendResponseToCustomer
         {
             if (await GetSecrets())
             {
+                Boolean suppressResponse = false;
+               
                 JObject o = JObject.Parse(input.ToString());
                 caseReference = (string)o.SelectToken("CaseReference");
                 taskToken = (string)o.SelectToken("TaskToken");
+
+                String fromStatus = (String)o.SelectToken("FromStatus");
+                String transition = (String)o.SelectToken("Transition");
+
+                if (fromStatus.Equals(transition))
+                {
+                    suppressResponse = true;
+                    Console.WriteLine("supressing response : " + caseReference);
+                }
+
                 Console.WriteLine("caseReference : " + caseReference);
 
                 try
@@ -67,7 +79,7 @@ namespace SendResponseToCustomer
                     cxmEndPoint = secrets.cxmEndPointLive;
                     cxmAPIKey = secrets.cxmAPIKeyLive;
                     CaseDetails caseDetailsLive = await GetCaseDetailsAsync();
-                    await ProcessCaseAsync(caseDetailsLive);
+                    await ProcessCaseAsync(caseDetailsLive,suppressResponse);
                     await SendSuccessAsync();
                 }
                 else
@@ -75,7 +87,7 @@ namespace SendResponseToCustomer
                     cxmEndPoint = secrets.cxmEndPointTest;
                     cxmAPIKey = secrets.cxmAPIKeyTest;
                     CaseDetails caseDetailsTest = await GetCaseDetailsAsync();
-                    await ProcessCaseAsync(caseDetailsTest);
+                    await ProcessCaseAsync(caseDetailsTest,suppressResponse);
                     await SendSuccessAsync();
                 }
             }                 
@@ -144,7 +156,7 @@ namespace SendResponseToCustomer
             return caseDetails;
         }
 
-        private async Task<Boolean> ProcessCaseAsync(CaseDetails caseDetails)
+        private async Task<Boolean> ProcessCaseAsync(CaseDetails caseDetails, Boolean supporessResponse)
         {
             Boolean success = true;
             try
@@ -160,7 +172,7 @@ namespace SendResponseToCustomer
                         if (!String.IsNullOrEmpty(emailBody))
                         {
                             //TODO remove norbert hardcoding
-                            if (await SendMessageAsync(emailBody, caseDetails, "updates@northampton.gov.uk"))
+                            if (await SendMessageAsync(emailBody, caseDetails, "updates@northampton.gov.uk", supporessResponse))
                             //if (await SendMessageAsync(emailBody, caseDetails, "norbert@northampton.digital"))
                             {
                                 switch (caseDetails.transitionTo.ToLower())
@@ -261,51 +273,54 @@ namespace SendResponseToCustomer
             return emailBody;
         }
 
-        private async Task<Boolean> SendMessageAsync(String emailBody, CaseDetails caseDetails, String emailFrom)
+        private async Task<Boolean> SendMessageAsync(String emailBody, CaseDetails caseDetails, String emailFrom, Boolean suppressResponse)
         {
-            try
+            if (!suppressResponse)
             {
-                AmazonSQSClient amazonSQSClient = new AmazonSQSClient(sqsRegion);
                 try
                 {
-                    SendMessageRequest sendMessageRequest = new SendMessageRequest();
-                    sendMessageRequest.QueueUrl = secrets.sqsEmailURL;
-                    sendMessageRequest.MessageBody = emailBody;
-                    Dictionary<string, MessageAttributeValue> MessageAttributes = new Dictionary<string, MessageAttributeValue>();
-                    MessageAttributeValue messageTypeAttribute1 = new MessageAttributeValue();
-                    messageTypeAttribute1.DataType = "String";
-                    messageTypeAttribute1.StringValue = caseDetails.customerName;
-                    MessageAttributes.Add("Name", messageTypeAttribute1);
-                    MessageAttributeValue messageTypeAttribute2 = new MessageAttributeValue();
-                    messageTypeAttribute2.DataType = "String";
-                    messageTypeAttribute2.StringValue = caseDetails.customerEmail;
-                    MessageAttributes.Add("To", messageTypeAttribute2);
-                    MessageAttributeValue messageTypeAttribute3 = new MessageAttributeValue();
-                    messageTypeAttribute3.DataType = "String";
-                    messageTypeAttribute3.StringValue = "Northampton Borough Council: Your Call Number is " + caseReference; ;
-                    MessageAttributes.Add("Subject", messageTypeAttribute3);
-                    MessageAttributeValue messageTypeAttribute4 = new MessageAttributeValue();
-                    messageTypeAttribute4.DataType = "String";
-                    messageTypeAttribute4.StringValue = emailFrom;
-                    MessageAttributes.Add("From", messageTypeAttribute4);
-                    sendMessageRequest.MessageAttributes = MessageAttributes;
-                    SendMessageResponse sendMessageResponse = await amazonSQSClient.SendMessageAsync(sendMessageRequest);
+                    AmazonSQSClient amazonSQSClient = new AmazonSQSClient(sqsRegion);
+                    try
+                    {
+                        SendMessageRequest sendMessageRequest = new SendMessageRequest();
+                        sendMessageRequest.QueueUrl = secrets.sqsEmailURL;
+                        sendMessageRequest.MessageBody = emailBody;
+                        Dictionary<string, MessageAttributeValue> MessageAttributes = new Dictionary<string, MessageAttributeValue>();
+                        MessageAttributeValue messageTypeAttribute1 = new MessageAttributeValue();
+                        messageTypeAttribute1.DataType = "String";
+                        messageTypeAttribute1.StringValue = caseDetails.customerName;
+                        MessageAttributes.Add("Name", messageTypeAttribute1);
+                        MessageAttributeValue messageTypeAttribute2 = new MessageAttributeValue();
+                        messageTypeAttribute2.DataType = "String";
+                        messageTypeAttribute2.StringValue = caseDetails.customerEmail;
+                        MessageAttributes.Add("To", messageTypeAttribute2);
+                        MessageAttributeValue messageTypeAttribute3 = new MessageAttributeValue();
+                        messageTypeAttribute3.DataType = "String";
+                        messageTypeAttribute3.StringValue = "Northampton Borough Council: Your Call Number is " + caseReference; ;
+                        MessageAttributes.Add("Subject", messageTypeAttribute3);
+                        MessageAttributeValue messageTypeAttribute4 = new MessageAttributeValue();
+                        messageTypeAttribute4.DataType = "String";
+                        messageTypeAttribute4.StringValue = emailFrom;
+                        MessageAttributes.Add("From", messageTypeAttribute4);
+                        sendMessageRequest.MessageAttributes = MessageAttributes;
+                        SendMessageResponse sendMessageResponse = await amazonSQSClient.SendMessageAsync(sendMessageRequest);
+                    }
+                    catch (Exception error)
+                    {
+                        await SendFailureAsync("Error sending SQS message", error.Message);
+                        Console.WriteLine("ERROR : SendMessageAsync : Error sending SQS message : '{0}'", error.Message);
+                        Console.WriteLine("ERROR : SendMessageAsync : " + error.StackTrace);
+                        return false;
+                    }
                 }
                 catch (Exception error)
                 {
-                    await SendFailureAsync("Error sending SQS message", error.Message);
-                    Console.WriteLine("ERROR : SendMessageAsync : Error sending SQS message : '{0}'", error.Message);
+                    await SendFailureAsync("Error starting AmazonSQSClient", error.Message);
+                    Console.WriteLine("ERROR : SendMessageAsync :  Error starting AmazonSQSClient : '{0}'", error.Message);
                     Console.WriteLine("ERROR : SendMessageAsync : " + error.StackTrace);
                     return false;
                 }
-            }
-            catch (Exception error)
-            {
-                await SendFailureAsync("Error starting AmazonSQSClient", error.Message);
-                Console.WriteLine("ERROR : SendMessageAsync :  Error starting AmazonSQSClient : '{0}'", error.Message);
-                Console.WriteLine("ERROR : SendMessageAsync : " + error.StackTrace);
-                return false;
-            }
+            } 
             return true;
         }
 
@@ -333,6 +348,10 @@ namespace SendResponseToCustomer
 
         private async Task<Boolean> StoreToDynamoAsync(String caseReference, String fieldName, String fieldValue)
         {
+            if(String.IsNullOrEmpty(fieldValue))
+            {
+                fieldValue = " ";
+            }
             try
             {
                 AmazonDynamoDBClient dynamoDBClient = new AmazonDynamoDBClient(primaryRegion);
